@@ -286,8 +286,8 @@ class TestBigQueryTest:
     @pytest.mark.parametrize(
         ("left", "right", "expected"),
         [
-            ("SELECT 1 a", "SELECT 0 + 1 a", True),
-            ("SELECT 1 a", "SELECT 1 + 1 a", False),
+            ('SELECT NUMERIC "1" a', 'SELECT NUMERIC "1" * 1 a', True),
+            ('SELECT NUMERIC "1" a', 'SELECT "1" a', False),
         ],
     )
     def test_query_to_check_that_two_query_results_match(
