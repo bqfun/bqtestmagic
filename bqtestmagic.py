@@ -35,14 +35,14 @@ class BigQueryTest:
                 *
               FROM (
                 SELECT
-                  TO_JSON_STRING(actual) AS json_string,
+                  FORMAT("%T", actual) AS json_string,
                   COUNT(*) AS count
                 FROM (\n{textwrap.indent(left.rstrip(), "                  ")} ) AS actual
                 GROUP BY
                   json_string) AS actual
               FULL JOIN (
                 SELECT
-                  TO_JSON_STRING(expected) AS json_string,
+                  FORMAT("%T", expected) AS json_string,
                   COUNT(*) AS count
                 FROM (\n{textwrap.indent(right.rstrip(), "                  ")} ) AS expected
                 GROUP BY
