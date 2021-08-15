@@ -7,7 +7,7 @@ We recommend using bqtestmagic on Google Colaboratory.
 ### Install Extension
 
 ```Shell
-pip install git+https://github.com/na0fu3y/bqtest-magic
+pip install git+https://github.com/bqfun/bqtestmagic
 ```
 
 ### Load Extension
