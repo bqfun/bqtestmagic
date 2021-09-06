@@ -28,7 +28,7 @@ class BigQueryTest:
         ).to_dataframe()
 
     def query_to_check_that_two_query_results_match(
-        self, left: str, right: str
+        self, left: str, right: str, labels: Dict[str, str]
     ) -> bool:
         sql = textwrap.dedent(
             f"""\
@@ -56,7 +56,9 @@ class BigQueryTest:
                 (actual.count = expected.count) IS NOT TRUE )
             """  # noqa: E501
         )
-        query_job = self.client.query(sql)
+        query_job = self.client.query(
+            sql, job_config=bigquery.QueryJobConfig(labels=labels)
+        )
         return next(iter(query_job))[0]
 
     def validate_query(self, query: str):
@@ -87,8 +89,7 @@ class BigQueryTest:
                 if not reliable:
                     self.validate_query(expected_sql)
                 equals = self.query_to_check_that_two_query_results_match(
-                    expected_sql,
-                    query,
+                    expected_sql, query, labels
                 )
                 print("✓" if equals else "✕")
             if csv_file:

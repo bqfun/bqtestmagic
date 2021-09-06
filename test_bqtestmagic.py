@@ -329,7 +329,9 @@ class TestBigQueryTest:
         right: str,
         expected: bool,
     ):
-        actual = bigquery_test.query_to_check_that_two_query_results_match(left, right)
+        actual = bigquery_test.query_to_check_that_two_query_results_match(
+            left, right, {}
+        )
         assert actual == expected
 
     @pytest.mark.skipif(
