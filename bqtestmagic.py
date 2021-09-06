@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import pandas as pd
+from google.api_core.exceptions import BadRequest
 from google.cloud import bigquery
 from IPython.core import magic_arguments
 from IPython.core.magic import Magics, cell_magic, magics_class
@@ -32,7 +33,7 @@ class BigQueryTest:
     ) -> bool:
         sql = textwrap.dedent(
             f"""\
-            SELECT
+            ASSERT
               NOT EXISTS(
               SELECT
                 *
@@ -59,7 +60,22 @@ class BigQueryTest:
         query_job = self.client.query(
             sql, job_config=bigquery.QueryJobConfig(labels=labels)
         )
-        return next(iter(query_job))[0]
+
+        try:
+            query_job.result()
+        except BadRequest as e:
+            if e.errors == [
+                {
+                    "message": "Assertion failed",
+                    "domain": "global",
+                    "reason": "invalidQuery",
+                    "location": "q",
+                    "locationType": "parameter",
+                }
+            ]:
+                return False
+            raise e
+        return True
 
     def validate_query(self, query: str):
         job_config = bigquery.QueryJobConfig(dry_run=True)
