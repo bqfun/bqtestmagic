@@ -1,9 +1,11 @@
 import argparse
 import sys
 import textwrap
-from typing import Optional
+from pathlib import Path
+from typing import Dict, Optional
 
 import pandas as pd
+from google.api_core.exceptions import BadRequest
 from google.cloud import bigquery
 from IPython.core import magic_arguments
 from IPython.core.magic import Magics, cell_magic, magics_class
@@ -21,15 +23,17 @@ class BigQueryTest:
         if hasattr(self.client, "close"):
             self.client.close()
 
-    def download_query_results_to_dataframe(self, sql: str):
-        return self.client.query(sql).to_dataframe()
+    def download_query_results_to_dataframe(self, sql: str, labels: Dict[str, str]):
+        return self.client.query(
+            sql, job_config=bigquery.QueryJobConfig(labels=labels)
+        ).to_dataframe()
 
     def query_to_check_that_two_query_results_match(
-        self, left: str, right: str
+        self, left: str, right: str, labels: Dict[str, str]
     ) -> bool:
         sql = textwrap.dedent(
             f"""\
-            SELECT
+            ASSERT
               NOT EXISTS(
               SELECT
                 *
@@ -53,8 +57,25 @@ class BigQueryTest:
                 (actual.count = expected.count) IS NOT TRUE )
             """  # noqa: E501
         )
-        query_job = self.client.query(sql)
-        return next(iter(query_job))[0]
+        query_job = self.client.query(
+            sql, job_config=bigquery.QueryJobConfig(labels=labels)
+        )
+
+        try:
+            query_job.result()
+        except BadRequest as e:
+            if e.errors == [
+                {
+                    "message": "Assertion failed",
+                    "domain": "global",
+                    "reason": "invalidQuery",
+                    "location": "q",
+                    "locationType": "parameter",
+                }
+            ]:
+                return False
+            raise e
+        return True
 
     def validate_query(self, query: str):
         job_config = bigquery.QueryJobConfig(dry_run=True)
@@ -66,15 +87,16 @@ class BigQueryTest:
     def test(
         self,
         query: str,
-        csv_file: Optional[str],
-        sql_file: Optional[str],
+        csv_file: Optional[Path],
+        sql_file: Optional[Path],
         reliable: bool,
+        labels: Dict[str, str],
     ) -> Optional[pd.DataFrame]:
         if csv_file and sql_file:
             raise ValueError("Please specify only sql_file or csv_file.")
 
         try:
-            actual = self.download_query_results_to_dataframe(query)
+            actual = self.download_query_results_to_dataframe(query, labels)
 
             if sql_file:
                 with open(sql_file) as f:
@@ -83,8 +105,7 @@ class BigQueryTest:
                 if not reliable:
                     self.validate_query(expected_sql)
                 equals = self.query_to_check_that_two_query_results_match(
-                    expected_sql,
-                    query,
+                    expected_sql, query, labels
                 )
                 print("✓" if equals else "✕")
             if csv_file:
@@ -97,19 +118,24 @@ class BigQueryTest:
             return None
 
 
+def label(string):
+    if "=" not in string:
+        raise argparse.ArgumentTypeError(f"{string} is not KEY=VALUE")
+    return tuple(string.split("=", 1))
+
+
 @magics_class
 class SQLTestMagic(Magics):
     @cell_magic
     @magic_arguments.magic_arguments()
-    @magic_arguments.argument("target", type=str.lower)
-    @magic_arguments.argument("--csv_file", type=str)
-    @magic_arguments.argument("--sql_file", type=str)
+    @magic_arguments.argument("target", type=str.lower, choices=["bigquery"])
+    @magic_arguments.argument("--csv_file", type=Path)
+    @magic_arguments.argument("--sql_file", type=Path)
     @magic_arguments.argument("--project", type=str)
-    @magic_arguments.argument("--reliable", action="store_true", default=False)
+    @magic_arguments.argument("--reliable", action="store_true")
+    @magic_arguments.argument("--labels", type=label, metavar="KEY=VALUE", nargs="*")
     def sql(self, line: str, query: str) -> Optional[pd.DataFrame]:
         args: argparse.Namespace = magic_arguments.parse_argstring(self.sql, line)
-        if args.target != "bigquery":
-            raise NotImplementedError("Only target=bigquery is supported.")
 
         with BigQueryTest(args.project) as bqtest:
             return bqtest.test(
@@ -117,6 +143,7 @@ class SQLTestMagic(Magics):
                 csv_file=args.csv_file,
                 sql_file=args.sql_file,
                 reliable=args.reliable,
+                labels={k: v for k, v in args.labels} if args.labels else {},
             )
 
 

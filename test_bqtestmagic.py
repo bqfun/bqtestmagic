@@ -1,13 +1,17 @@
+import argparse
 import os
 import tempfile
 import textwrap
+from pathlib import Path
+from typing import Dict
 
 import pandas as pd
 import pytest
 from google.api_core.exceptions import BadRequest
+from IPython.core.error import UsageError
 from pytest_mock.plugin import MockerFixture
 
-from bqtestmagic import BigQueryTest, SQLTestMagic
+from bqtestmagic import BigQueryTest, SQLTestMagic, label
 
 
 class TestSQLTestMagic:
@@ -27,20 +31,21 @@ class TestSQLTestMagic:
         pd.testing.assert_frame_equal(df, actual)
 
     def test_raise_error_if_target_is_not_bigquery(self, bqtest: SQLTestMagic):
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UsageError):
             bqtest.sql("other", "SELECT 1 col1")
 
     @pytest.mark.parametrize(
-        ("line", "query", "csv_file", "sql_file", "project", "reliable"),
+        ("line", "query", "csv_file", "sql_file", "project", "reliable", "labels"),
         [
-            ("BigQuery", "SELECT 1 col1", None, None, None, False),
+            ("BigQuery", "SELECT 1 col1", None, None, None, False, {}),
             (
-                "BigQuery --csv_file=a.csv --sql_file=b.sql --project=my-project --reliable",  # noqa: E501
+                "BigQuery --csv_file=a.csv --sql_file=b.sql --project=my-project --reliable --labels a=b",  # noqa: E501
                 "SELECT 1 col1",
-                "a.csv",
-                "b.sql",
+                Path("a.csv"),
+                Path("b.sql"),
                 "my-project",
                 True,
+                {"a": "b"},
             ),
         ],
     )
@@ -50,10 +55,11 @@ class TestSQLTestMagic:
         bqtest: SQLTestMagic,
         line: str,
         query: str,
-        csv_file: str,
-        sql_file: str,
+        csv_file: Path,
+        sql_file: Path,
         project: str,
         reliable: bool,
+        labels: Dict[str, str],
     ):
         client = mocker.patch("google.cloud.bigquery.Client")
         mock = mocker.patch("bqtestmagic.BigQueryTest.test")
@@ -61,7 +67,11 @@ class TestSQLTestMagic:
 
         client.assert_called_once_with(project)
         mock.assert_called_once_with(
-            query=query, csv_file=csv_file, sql_file=sql_file, reliable=reliable
+            query=query,
+            csv_file=csv_file,
+            sql_file=sql_file,
+            reliable=reliable,
+            labels=labels,
         )
 
     class TestClose:
@@ -84,6 +94,16 @@ class TestSQLTestMagic:
             assert hasattr(client, "close") is False
 
 
+class TestLabel:
+    def test_failed(self):
+        with pytest.raises(argparse.ArgumentTypeError):
+            label("abc")
+
+    def test_success(self):
+        actual = label("abc=def")
+        assert actual == ("abc", "def")
+
+
 class TestBigQueryTest:
     @pytest.fixture
     def bigquery_test(self) -> BigQueryTest:
@@ -96,9 +116,10 @@ class TestBigQueryTest:
             with pytest.raises(ValueError):
                 bigquery_test.test(
                     query="SELECT 1",
-                    csv_file="set.csv",
-                    sql_file="set.sql",
+                    csv_file=Path("set.csv"),
+                    sql_file=Path("set.sql"),
                     reliable=False,
+                    labels={},
                 )
 
         class TestDataframeQueryResultsToDataframe:
@@ -116,12 +137,9 @@ class TestBigQueryTest:
                 )
                 query = "SELECT 1 col1, 3 col2 UNION ALL SELECT 2, 4"
                 actual = bigquery_test.test(
-                    query=query,
-                    csv_file=None,
-                    sql_file=None,
-                    reliable=False,
+                    query=query, csv_file=None, sql_file=None, reliable=False, labels={}
                 )
-                download_query_results_to_dataframe.assert_called_once_with(query)
+                download_query_results_to_dataframe.assert_called_once_with(query, {})
                 pd.testing.assert_frame_equal(actual, df)
                 assert capfd.readouterr() == ("", "")
 
@@ -144,11 +162,14 @@ class TestBigQueryTest:
                         f.seek(0)
                         actual = bigquery_test.test(
                             query=query,
-                            csv_file=f.name,
+                            csv_file=Path(f.name),
                             sql_file=None,
                             reliable=False,
+                            labels={},
                         )
-                    download_query_results_to_dataframe.assert_called_once_with(query)
+                    download_query_results_to_dataframe.assert_called_once_with(
+                        query, {}
+                    )
                     pd.testing.assert_frame_equal(actual, df)
                     assert capfd.readouterr() == ("✓\n", "")
 
@@ -170,11 +191,14 @@ class TestBigQueryTest:
                         f.seek(0)
                         actual = bigquery_test.test(
                             query=query,
-                            csv_file=f.name,
+                            csv_file=Path(f.name),
                             sql_file=None,
                             reliable=False,
+                            labels={},
                         )
-                    download_query_results_to_dataframe.assert_called_once_with(query)
+                    download_query_results_to_dataframe.assert_called_once_with(
+                        query, {}
+                    )
                     pd.testing.assert_frame_equal(actual, df)
                     assert capfd.readouterr() == ("✕\n", "")
 
@@ -201,8 +225,9 @@ class TestBigQueryTest:
                     bigquery_test.test(
                         query="SELECT 1 col1, 3 col2 UNION ALL SELECT 2, 4",
                         csv_file=None,
-                        sql_file=f.name,
+                        sql_file=Path(f.name),
                         reliable=False,
+                        labels={},
                     )
 
                 validate_query.assert_called_once_with(unreliable_query)
@@ -231,10 +256,13 @@ class TestBigQueryTest:
                         actual = bigquery_test.test(
                             query=query,
                             csv_file=None,
-                            sql_file=f.name,
+                            sql_file=Path(f.name),
                             reliable=True,
+                            labels={},
                         )
-                    download_query_results_to_dataframe.assert_called_once_with(query)
+                    download_query_results_to_dataframe.assert_called_once_with(
+                        query, {}
+                    )
                     pd.testing.assert_frame_equal(actual, df)
                     assert capfd.readouterr() == ("✓\n", "")
 
@@ -261,20 +289,24 @@ class TestBigQueryTest:
                         actual = bigquery_test.test(
                             query=query,
                             csv_file=None,
-                            sql_file=f.name,
+                            sql_file=Path(f.name),
                             reliable=True,
+                            labels={},
                         )
-                    download_query_results_to_dataframe.assert_called_once_with(query)
+                    download_query_results_to_dataframe.assert_called_once_with(
+                        query, {}
+                    )
                     pd.testing.assert_frame_equal(actual, df)
                     assert capfd.readouterr() == ("✕\n", "")
 
+    # QueryJob.labels is not set, so skip the test.
     @pytest.mark.skipif(
         os.environ.get("CI", "false") != "true",
         reason="Unauthenticated tests only",
     )
     def test_download_query_results_to_dataframe(self, bigquery_test: BigQueryTest):
         actual = bigquery_test.download_query_results_to_dataframe(
-            "SELECT 1 col1, 3 col2 UNION ALL SELECT 2, 4"
+            "SELECT 1 col1, 3 col2 UNION ALL SELECT 2, 4", labels={}
         )
         expected = pd.DataFrame(data={"col1": [1, 2], "col2": [3, 4]})
         pd.testing.assert_frame_equal(actual, expected)
@@ -291,9 +323,15 @@ class TestBigQueryTest:
         ],
     )
     def test_query_to_check_that_two_query_results_match(
-        self, bigquery_test: BigQueryTest, left: str, right: str, expected: bool
+        self,
+        bigquery_test: BigQueryTest,
+        left: str,
+        right: str,
+        expected: bool,
     ):
-        actual = bigquery_test.query_to_check_that_two_query_results_match(left, right)
+        actual = bigquery_test.query_to_check_that_two_query_results_match(
+            left, right, {}
+        )
         assert actual == expected
 
     @pytest.mark.skipif(
